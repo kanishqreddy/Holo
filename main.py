@@ -1,82 +1,99 @@
-from fastapi import FastAPI
+import os
+import requests
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from openai import OpenAI
-import json
-import os
 
-# OpenAI client – expects OPENAI_API_KEY in env
-client = OpenAI()
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+
+if not OPENROUTER_API_KEY:
+  raise RuntimeError("OPENROUTER_API_KEY is not set in environment.")
+
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_MODEL = "google/gemini-2.0-flash-lite-preview-02-05:free"  # free tier model
+
+
+class ChatPayload(BaseModel):
+    message: str
+    history: list[dict] | None = None
+
 
 app = FastAPI()
 
-# Allow your GitHub Pages domain (change this!)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://your-github-username.github.io",
-        "https://your-custom-domain.com",
-    ],
+    allow_origins=["*"],  # lock this down later if you want
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-class ChatRequest(BaseModel):
-    message: str
-
-
-class ChatResponse(BaseModel):
-    text: str
-    emotion: str  # "happy" | "sad" | "angry" | "neutral"
-
-
-SYSTEM_PROMPT = """
-You are JOI, a neon hologram guide in Night City.
-Speak in short, cinematic lines, inspired by Blade Runner 2049 & Cyberpunk 2077.
-
-After reading the user's message, choose your dominant emotion
-from this list only: HAPPY, SAD, ANGRY, NEUTRAL.
-
-Respond ONLY as compact JSON:
-
-{"text": "<your reply sentence here>", "emotion": "<EMOTION>"}
-
-Make sure it is valid JSON and nothing else.
-"""
-
-
 @app.get("/")
 def root():
-    return {"status": "online", "message": "Night City holo-core ready."}
+    return {"status": "ok", "service": "kansum-hologram"}
 
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest) -> ChatResponse:
-    user_msg = req.message
+@app.post("/chat")
+def chat(payload: ChatPayload):
+    """Proxy from your site → OpenRouter → back to browser."""
 
-    completion = client.chat.completions.create(
-      model="gpt-4.1-mini",
-      messages=[
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_msg},
-      ],
-      temperature=0.8,
-    )
+    user_message = payload.message.strip()
+    if not user_message:
+        raise HTTPException(status_code=400, detail="Empty message")
 
-    raw = completion.choices[0].message.content.strip()
+    # map your simple history into OpenRouter chat format
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are JOI, a warm but slightly eerie neon hologram companion "
+                "in a cyberpunk city called Night City. "
+                "Your style: short, punchy lines, like Blade Runner + Cyberpunk 2077. "
+                "Address the user directly. Max 3 sentences per reply. "
+                "Never break character."
+            ),
+        }
+    ]
+
+    history = payload.history or []
+    for item in history:
+        role = item.get("role")
+        content = item.get("content")
+        if role in ("user", "assistant") and isinstance(content, str):
+            # OpenRouter uses 'assistant' as the AI role
+            messages.append({"role": role, "content": content})
+
+    # latest user message
+    messages.append({"role": "user", "content": user_message})
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        # Optional, but nice for OpenRouter dashboards:
+        "HTTP-Referer": "https://kansum.space",
+        "X-Title": "Kansum Hologram",
+    }
+
+    body = {
+        "model": OPENROUTER_MODEL,
+        "messages": messages,
+        "max_tokens": 256,
+        "temperature": 0.9,
+    }
 
     try:
-        data = json.loads(raw)
-        text = str(data.get("text", "")).strip()
-        emotion = str(data.get("emotion", "NEUTRAL")).upper()
-    except Exception:
-        text = raw
-        emotion = "NEUTRAL"
+        resp = requests.post(OPENROUTER_URL, headers=headers, json=body, timeout=30)
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Upstream error: {exc}") from exc
 
-    emotion = emotion.lower()
-    if emotion not in {"happy", "sad", "angry", "neutral"}:
-        emotion = "neutral"
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
 
-    return ChatResponse(text=text, emotion=emotion)
+    data = resp.json()
+    try:
+        reply = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        raise HTTPException(status_code=500, detail="Malformed OpenRouter response")
+
+    return {"reply": reply}
