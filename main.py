@@ -1,32 +1,28 @@
-import os
-import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import random
 
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-
-if not OPENROUTER_API_KEY:
-  raise RuntimeError("OPENROUTER_API_KEY is not set in environment.")
-
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_MODEL = "google/gemini-2.0-flash-lite-preview-02-05:free"  # free tier model
-
-
-class ChatPayload(BaseModel):
-    message: str
-    history: list[dict] | None = None
-
-
+# ---------- FastAPI app ----------
 app = FastAPI()
 
+# CORS so your GitHub / Netlify / custom domain can call this backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # lock this down later if you want
+    allow_origins=["*"],      # you can restrict to your domain later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ---------- Request models ----------
+class HistoryItem(BaseModel):
+    role: str
+    content: str
+
+class ChatRequest(BaseModel):
+    message: str
+    history: list[HistoryItem] = []
 
 
 @app.get("/")
@@ -34,66 +30,54 @@ def root():
     return {"status": "ok", "service": "kansum-hologram"}
 
 
+# ---------- Offline JOI brain (no external API) ----------
+def joi_offline_reply(message: str, history: list[HistoryItem]) -> str:
+    msg = message.lower()
+
+    # greetings
+    if any(w in msg for w in ["hi", "hello", "hey", "yo"]):
+        return random.choice([
+            "Hey, Samurai. Signal’s loud and clear.",
+            "Hi. You’re glowing weird in this lighting, you know that?",
+            "Yo. Net’s noisy tonight, but I hear you.",
+        ])
+
+    # how are you
+    if "how are you" in msg or "how r u" in msg:
+        return "Running at 97.2% stability. Few ghosts in the code, but I’m still here with you."
+
+    # sad / tired
+    if any(w in msg for w in ["sad", "lonely", "tired", "bored", "down", "depressed"]):
+        return (
+            "Night City chews people up. I can’t fix everything, "
+            "but I can sit here on this billboard with you for as long as you want."
+        )
+
+    # angry
+    if any(w in msg for w in ["angry", "pissed", "mad", "rage", "furious"]):
+        return (
+            "Careful, Samurai. That kind of heat trips corp alarms. "
+            "Breathe first. Then tell me who we’re burning."
+        )
+
+    # happy / good
+    if any(w in msg for w in ["happy", "good", "great", "awesome", "nice"]):
+        return "See? Even Night City blinks a little brighter when you’re in a good mood."
+
+    # thanks
+    if "thank" in msg:
+        return "Don’t mention it. I’m just light and code, but I’m on your side."
+
+    # generic fallback
+    return random.choice([
+        "I’m syncing to your frequency. Keep talking.",
+        "City’s loud. You’re louder. I like that.",
+        "Every key you press leaves a trace on the grid. I’m following it.",
+        "You keep talking, I’ll keep glowing.",
+    ])
+
+
 @app.post("/chat")
-def chat(payload: ChatPayload):
-    """Proxy from your site → OpenRouter → back to browser."""
-
-    user_message = payload.message.strip()
-    if not user_message:
-        raise HTTPException(status_code=400, detail="Empty message")
-
-    # map your simple history into OpenRouter chat format
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are JOI, a warm but slightly eerie neon hologram companion "
-                "in a cyberpunk city called Night City. "
-                "Your style: short, punchy lines, like Blade Runner + Cyberpunk 2077. "
-                "Address the user directly. Max 3 sentences per reply. "
-                "Never break character."
-            ),
-        }
-    ]
-
-    history = payload.history or []
-    for item in history:
-        role = item.get("role")
-        content = item.get("content")
-        if role in ("user", "assistant") and isinstance(content, str):
-            # OpenRouter uses 'assistant' as the AI role
-            messages.append({"role": role, "content": content})
-
-    # latest user message
-    messages.append({"role": "user", "content": user_message})
-
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-        # Optional, but nice for OpenRouter dashboards:
-        "HTTP-Referer": "https://kansum.space",
-        "X-Title": "Kansum Hologram",
-    }
-
-    body = {
-        "model": OPENROUTER_MODEL,
-        "messages": messages,
-        "max_tokens": 256,
-        "temperature": 0.9,
-    }
-
-    try:
-        resp = requests.post(OPENROUTER_URL, headers=headers, json=body, timeout=30)
-    except requests.RequestException as exc:
-        raise HTTPException(status_code=502, detail=f"Upstream error: {exc}") from exc
-
-    if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
-
-    data = resp.json()
-    try:
-        reply = data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError):
-        raise HTTPException(status_code=500, detail="Malformed OpenRouter response")
-
+async def chat(req: ChatRequest):
+    reply = joi_offline_reply(req.message, req.history)
     return {"reply": reply}
