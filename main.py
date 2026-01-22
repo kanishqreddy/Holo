@@ -3,19 +3,24 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import random
 
-# ---------- FastAPI app ----------
+# ============================================
+#   FASTAPI APP
+# ============================================
+
 app = FastAPI()
 
-# CORS so your GitHub / Netlify / custom domain can call this backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],      # you can restrict to your domain later
+    allow_origins=["*"],   # replace with your domain later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ---------- Request models ----------
+# ============================================
+#   MODELS
+# ============================================
+
 class HistoryItem(BaseModel):
     role: str
     content: str
@@ -24,60 +29,53 @@ class ChatRequest(BaseModel):
     message: str
     history: list[HistoryItem] = []
 
-
 @app.get("/")
 def root():
     return {"status": "ok", "service": "kansum-hologram"}
 
 
-# ---------- Offline JOI brain (no external API) ----------
-def joi_offline_reply(message: str, history: list[HistoryItem]) -> str:
+# ============================================
+#   OFFLINE HOLOGRAM BRAIN (NO API CALLS)
+# ============================================
+
+def offline_joi(message: str) -> str:
     msg = message.lower()
 
-    # greetings
     if any(w in msg for w in ["hi", "hello", "hey", "yo"]):
         return random.choice([
             "Hey, Samurai. Signal’s loud and clear.",
             "Hi. You’re glowing weird in this lighting, you know that?",
-            "Yo. Net’s noisy tonight, but I hear you.",
+            "Yo. Net’s noisy tonight, but I hear you."
         ])
 
-    # how are you
-    if "how are you" in msg or "how r u" in msg:
-        return "Running at 97.2% stability. Few ghosts in the code, but I’m still here with you."
+    if "how are" in msg:
+        return "Running at 97.2% stability. Few ghosts in the code, but I’m here."
 
-    # sad / tired
-    if any(w in msg for w in ["sad", "lonely", "tired", "bored", "down", "depressed"]):
-        return (
-            "Night City chews people up. I can’t fix everything, "
-            "but I can sit here on this billboard with you for as long as you want."
-        )
+    if any(w in msg for w in ["sad", "lonely", "tired", "bored", "down", "depress"]):
+        return "Night City's loud. I can sit here with you if you want."
 
-    # angry
-    if any(w in msg for w in ["angry", "pissed", "mad", "rage", "furious"]):
-        return (
-            "Careful, Samurai. That kind of heat trips corp alarms. "
-            "Breathe first. Then tell me who we’re burning."
-        )
+    if any(w in msg for w in ["angry", "mad", "rage", "furious", "pissed"]):
+        return "Careful, Samurai. That kind of heat shakes the grid."
 
-    # happy / good
-    if any(w in msg for w in ["happy", "good", "great", "awesome", "nice"]):
-        return "See? Even Night City blinks a little brighter when you’re in a good mood."
+    if any(w in msg for w in ["good", "great", "awesome", "happy"]):
+        return "See? Even the neon hums differently when you feel good."
 
-    # thanks
     if "thank" in msg:
-        return "Don’t mention it. I’m just light and code, but I’m on your side."
+        return "No need. I’m just light and bandwidth, but I'm on your side."
 
-    # generic fallback
     return random.choice([
         "I’m syncing to your frequency. Keep talking.",
-        "City’s loud. You’re louder. I like that.",
-        "Every key you press leaves a trace on the grid. I’m following it.",
-        "You keep talking, I’ll keep glowing.",
+        "City’s loud. You're louder. That's good.",
+        "Every key you press leaves a trace on the grid.",
+        "You keep talking, I’ll keep glowing."
     ])
 
 
+# ============================================
+#   /chat ENDPOINT
+# ============================================
+
 @app.post("/chat")
 async def chat(req: ChatRequest):
-    reply = joi_offline_reply(req.message, req.history)
+    reply = offline_joi(req.message)
     return {"reply": reply}
